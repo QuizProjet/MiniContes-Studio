@@ -1,4 +1,4 @@
-# MiniContes Studio V3 — correction robuste de la génération audio Edge TTS
+# MiniContes Studio V4 — illustrations multiples, caméra animée et audio V3 préservé
 # Lancement : pip install -r requirements.txt && streamlit run app.py
 
 from pathlib import Path
@@ -12,7 +12,7 @@ OUTPUT_DIR = APP_DIR / "exports"
 PROJECTS_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-st.set_page_config(page_title="MiniContes Studio V3", page_icon="✨", layout="wide")
+st.set_page_config(page_title="MiniContes Studio V4", page_icon="✨", layout="wide")
 
 LANGS = {
     "Français": "fr",
@@ -128,30 +128,34 @@ def wrap_text(draw, text, font, max_width):
         lines.append(current)
     return lines
 
-def create_scene_image(title, body, index, total, lang, outpath, size=(1280,720)):
+def create_scene_image(title, body, index, total, lang, outpath, size=(1280,720), variation=0):
     w,h = size
     im = Image.new("RGB", size)
     pix = im.load()
-    # Gradient midnight blue -> purple
+    # Palette variee pour que les illustrations d'une meme histoire ne soient pas identiques.
+    palettes = [((13,25,68),(37,35,138)), ((12,48,62),(42,112,103)), ((48,24,72),(116,54,115))]
+    top, bottom = palettes[variation % len(palettes)]
     for y in range(h):
+        t = y / max(1, h-1)
+        row = (int(top[0]+(bottom[0]-top[0])*t), int(top[1]+(bottom[1]-top[1])*t), int(top[2]+(bottom[2]-top[2])*t))
         for x in range(w):
-            t = y / h
-            pix[x,y] = (int(13+24*t), int(25+10*t), int(68+70*t))
+            pix[x,y] = row
     d = ImageDraw.Draw(im)
     # stars
-    rng = random.Random(index * 101 + 7)
+    rng = random.Random(index * 101 + variation * 7919 + 7)
     for _ in range(110):
         x, y = rng.randint(0,w-1), rng.randint(0,int(h*.62))
         r = rng.choice([1,2,3,4])
         d.ellipse((x-r,y-r,x+r,y+r), fill=(255,220+rng.randint(0,30),130))
-    # moon
-    d.ellipse((w-210,50,w-100,160), fill=(255,229,155))
-    d.ellipse((w-180,30,w-70,140), fill=(28,35,85))
-    # hills
-    d.ellipse((-160, h*.55, w*.65, h*1.2), fill=(20,74,75))
-    d.ellipse((w*.25, h*.62, w*1.15, h*1.2), fill=(29,91,76))
-    # simple fox mascot
-    cx, cy = int(w*.18), int(h*.58)
+    # Lune et collines changent légèrement entre les illustrations.
+    moon_x = w - 210 if variation != 1 else int(w*.68)
+    d.ellipse((moon_x,50,moon_x+110,160), fill=(255,229,155))
+    d.ellipse((moon_x+30,30,moon_x+140,140), fill=top)
+    d.ellipse((-160, h*(.52 + .025*variation), w*.65, h*1.2), fill=(20,74+8*variation,75+5*variation))
+    d.ellipse((w*.25, h*(.60 + .02*(variation%2)), w*1.15, h*1.2), fill=(29,91,76+9*variation))
+    # Mascotte : position et pose varient pour donner plusieurs compositions.
+    fox_x = [.18, .27, .15][variation % 3]
+    cx, cy = int(w*fox_x), int(h*(.58 if variation != 2 else .62))
     d.ellipse((cx-82,cy-55,cx+82,cy+100), fill=(238,116,48), outline=(255,205,125), width=5)
     d.polygon([(cx-62,cy-50),(cx-72,cy-130),(cx-20,cy-76)], fill=(238,116,48), outline=(255,205,125))
     d.polygon([(cx+20,cy-76),(cx+72,cy-130),(cx+62,cy-50)], fill=(238,116,48), outline=(255,205,125))
@@ -160,7 +164,7 @@ def create_scene_image(title, body, index, total, lang, outpath, size=(1280,720)
     d.ellipse((cx+12,cy-24,cx+30,cy-2), fill=(30,25,38))
     d.ellipse((cx-7,cy+2,cx+7,cy+14), fill=(40,25,30))
     # magical star
-    sx, sy = int(w*.34), int(h*.40)
+    sx, sy = int(w*[.34,.48,.37][variation % 3]), int(h*[.40,.34,.45][variation % 3])
     pts=[]
     for j in range(10):
         a=-math.pi/2+j*math.pi/5
@@ -168,7 +172,8 @@ def create_scene_image(title, body, index, total, lang, outpath, size=(1280,720)
         pts.append((sx+math.cos(a)*r, sy+math.sin(a)*r))
     d.polygon(pts, fill=(255,221,76), outline=(255,248,188))
     # text panel
-    panel=(int(w*.39), int(h*.23), int(w*.94), int(h*.85))
+    panel_left = [int(w*.39), int(w*.34), int(w*.40)][variation % 3]
+    panel=(panel_left, int(h*.20 if variation == 1 else h*.23), int(w*.94), int(h*.85))
     d.rounded_rectangle(panel, radius=30, fill=(7,15,48), outline=(240,197,88), width=3)
     title_font=load_font(38, True)
     body_font=load_font(27)
@@ -265,8 +270,19 @@ def create_video(project, export_path, narrator_voice, character_voice=None, use
         clip_paths=[]
         progress=st.progress(0, text="Préparation des scènes et des voix IA…")
         for i, sc in enumerate(project["scenes"], 1):
-            image_path=tmp/f"scene_{i:02d}.png"
-            create_scene_image(project["title"], sc["text"], i, len(project["scenes"]), project["language"], image_path, size=(720,1280))
+            # Trois illustrations par scène, chacune affichant une portion du texte.
+            # La narration reste un seul fichier audio : aucune modification de la voix V3.
+            words = sc["text"].split()
+            if len(words) >= 12:
+                chunk_size = math.ceil(len(words) / 3)
+                visual_texts = [" ".join(words[k:k+chunk_size]) for k in range(0, len(words), chunk_size)][:3]
+            else:
+                visual_texts = [sc["text"], sc["text"], sc["text"]]
+            image_paths=[]
+            for vi, visual_text in enumerate(visual_texts):
+                image_path=tmp/f"scene_{i:02d}_visual_{vi+1}.png"
+                create_scene_image(project["title"], visual_text, i, len(project["scenes"]), project["language"], image_path, size=(720,1280), variation=vi)
+                image_paths.append(image_path)
             audio_parts=[]
             chunks=split_dialogue(sc["text"]) if use_character_voices and character_voice else [(sc["text"], False)]
             for j,(chunk,is_dialogue) in enumerate(chunks):
@@ -299,13 +315,43 @@ def create_video(project, export_path, narrator_voice, character_voice=None, use
                 except Exception: duration=max(5.0,len(sc["text"].split())/2.1)
             else:
                 duration=max(5.0,len(sc["text"].split())/2.1)
-            frames=max(1,math.ceil(duration*24))
-            clip=tmp/f"clip_{i:02d}.mp4"
-            vf=f"scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,zoompan=z='min(zoom+0.0007,1.07)':d={frames}:s=720x1280:fps=24,format=yuv420p"
-            cmd=[ffmpeg,"-y","-loop","1","-i",str(image_path),"-i",str(scene_audio),"-vf",vf,"-t",f"{duration:.2f}","-r","24","-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-shortest",str(clip)]
-            result=subprocess.run(cmd,capture_output=True,text=True)
+            # Découpe visuelle en trois plans, avec zoom/panoramique distincts.
+            # Les durées sont réparties selon le nombre de mots des portions affichées.
+            visual_durations=[]
+            total_words=max(1, sum(len(t.split()) for t in visual_texts))
+            for vi, visual_text in enumerate(visual_texts):
+                if vi == len(visual_texts)-1:
+                    seg_duration=max(1.0, duration-sum(visual_durations))
+                else:
+                    seg_duration=max(1.0, duration*len(visual_text.split())/total_words)
+                visual_durations.append(seg_duration)
+            # Ajuste le dernier plan pour que la somme corresponde exactement à la narration.
+            visual_durations[-1]=max(0.8, duration-sum(visual_durations[:-1]))
+            visual_clips=[]
+            for vi, (image_path, seg_duration) in enumerate(zip(image_paths, visual_durations)):
+                visual_clip=tmp/f"visual_{i:02d}_{vi+1}.mp4"
+                if vi % 3 == 0:
+                    zoom="min(zoom+0.0009,1.10)"
+                elif vi % 3 == 1:
+                    zoom="min(zoom+0.0007,1.08)"
+                else:
+                    zoom="min(zoom+0.0008,1.09)"
+                vf=f"scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,zoompan=z='{zoom}':d=1:s=720x1280:fps=24,format=yuv420p"
+                cmd=[ffmpeg,"-y","-loop","1","-i",str(image_path),"-vf",vf,"-t",f"{seg_duration:.3f}","-an","-r","24","-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p",str(visual_clip)]
+                result=subprocess.run(cmd,capture_output=True,text=True)
+                if result.returncode:
+                    raise RuntimeError("Échec du rendu d'une illustration animée : "+result.stderr[-1200:])
+                visual_clips.append(visual_clip)
+            visual_list=tmp/f"visual_list_{i:02d}.txt"
+            visual_list.write_text("".join(f"file '{p.as_posix()}'\n" for p in visual_clips),encoding="utf-8")
+            visual_only=tmp/f"visual_scene_{i:02d}.mp4"
+            result=subprocess.run([ffmpeg,"-y","-f","concat","-safe","0","-i",str(visual_list),"-c","copy",str(visual_only)],capture_output=True,text=True)
             if result.returncode:
-                raise RuntimeError("Échec du rendu de la scène : "+result.stderr[-1200:])
+                raise RuntimeError("Impossible d'assembler les illustrations de la scène : "+result.stderr[-1000:])
+            clip=tmp/f"clip_{i:02d}.mp4"
+            result=subprocess.run([ffmpeg,"-y","-i",str(visual_only),"-i",str(scene_audio),"-map","0:v:0","-map","1:a:0","-t",f"{duration:.2f}","-r","24","-c:v","libx264","-preset","veryfast","-pix_fmt","yuv420p","-c:a","aac","-b:a","128k","-shortest",str(clip)],capture_output=True,text=True)
+            if result.returncode:
+                raise RuntimeError("Échec de la synchronisation voix/image : "+result.stderr[-1200:])
             clip_paths.append(clip)
             progress.progress(i/len(project["scenes"]), text=f"Scène {i}/{len(project['scenes'])} — narration générée…")
         concat=tmp/"clips.txt"
@@ -324,7 +370,7 @@ st.markdown("""
 .note {padding:.8rem 1rem; border-radius:12px; background:#fff7dc; color:#3b3152;}
 </style>
 <div class="hero">
-<h1>✨ MiniContes Studio</h1>
+<h1>✨ MiniContes Studio V4</h1>
 <p>Crée des histoires illustrées, narrées et animées — français, العربية, English.</p>
 </div>
 """, unsafe_allow_html=True)
@@ -462,10 +508,10 @@ streamlit run app.py
 - Déploie le projet sur un hébergeur compatible avec Streamlit, par exemple Streamlit Community Cloud.
 - La version en ligne peut être gratuite dans les limites de l'offre de l'hébergeur. Edge TTS est un service en ligne et sa disponibilité ou ses conditions peuvent changer.
 - FFmpeg est installé par packages.txt sur Streamlit Cloud. Edge TTS nécessite un accès Internet. Les voix listées peuvent changer et le service n’est pas une garantie de gratuité commerciale.
-- Cette V2 utilise des illustrations générées par code, animées par un mouvement de caméra, et une narration vocale en ligne. Elle ne génère pas encore des clips animés complets par un modèle vidéo IA.
+- Cette V4 utilise plusieurs illustrations générées par code par scène, des mouvements de caméra et une narration vocale en ligne. Elle ne génère pas encore des clips animés complets par un modèle vidéo IA.
 
 ### Limites connues de la V2
-- Les visuels sont des illustrations stylisées animées par zoom lent, pas encore de véritables dessins animés image par image.
+- La V4 affiche jusqu'à trois illustrations par scène, avec cadrages et palettes variables, mouvements de caméra et narration conservée sur la même timeline. Ce sont des illustrations animées, pas encore des personnages générés en vidéo IA.
 - La génération vocale nécessite Internet. Les phrases entre guillemets peuvent être affectées à une voix de personnage distincte.
 - Les exports sont verticaux en 720×1280, 24 images/seconde.
 """)
